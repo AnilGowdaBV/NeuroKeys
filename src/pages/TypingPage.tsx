@@ -23,6 +23,7 @@ export function TypingPage() {
   const [targetText, setTargetText] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [liveSync, setLiveSync] = useState(0)
 
   const [focusMode, setFocusMode] = useState(true)
   const [strictMode, setStrictMode] = useState(false)
@@ -78,7 +79,7 @@ export function TypingPage() {
 
   return (
     <div className="relative min-h-svh overflow-x-hidden bg-[#03040a]">
-      <AmbientBackground />
+      <AmbientBackground syncFactor={liveSync} />
       <LandingLights />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.025)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.025)_1px,transparent_1px)] bg-[length:36px_36px] opacity-50 [mask-image:radial-gradient(ellipse_at_center,black,transparent_82%)]" />
       <AnimatedTypingBackdrop />
@@ -142,6 +143,7 @@ export function TypingPage() {
             topProblemKeys={topProblemKeys}
             addSession={addSession}
             onShuffleLine={config.mode !== 'custom' ? shuffleLine : undefined}
+            onSyncUpdate={setLiveSync}
           />
         ) : null}
       </div>

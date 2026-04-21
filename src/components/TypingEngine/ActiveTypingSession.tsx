@@ -54,6 +54,7 @@ export interface ActiveTypingSessionProps {
   addSession: (rec: Omit<TypingSessionRecord, 'id' | 'at'>) => void
   /** When set (non-custom modes), Retry loads a new random paragraph from the mode pool. */
   onShuffleLine?: () => void
+  onSyncUpdate?: (sync: number) => void
 }
 
 export function ActiveTypingSession({
@@ -66,6 +67,7 @@ export function ActiveTypingSession({
   topProblemKeys,
   addSession,
   onShuffleLine,
+  onSyncUpdate,
 }: ActiveTypingSessionProps) {
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [timerHardStop, setTimerHardStop] = useState(false)
@@ -73,10 +75,15 @@ export function ActiveTypingSession({
   const [coach, setCoach] = useState<CoachFeedback | null>(null)
   const flashSeq = useRef(0)
   const [keyFlash, setKeyFlash] = useState<KeyFlash | null>(null)
+  const [sessionMissedKeys, setSessionMissedKeys] = useState<string[]>([])
   const [resultsMeta, setResultsMeta] = useState<{ bestWpm: number; isNewHigh: boolean } | null>(null)
   const [resultsPhase, setResultsPhase] = useState<ResultsPresentationPhase>('idle')
   const savedRef = useRef(false)
   const prevSessionEndedRef = useRef(false)
+  const lastKeyTime = useRef<number | null>(null)
+  const intervals = useRef<number[]>([])
+  const accumulatedSync = useRef(0)
+  const syncSampleCount = useRef(0)
 
   const timedMode = config.mode === 'timed'
   const timerSeconds = config.timerSeconds ?? 60
@@ -88,6 +95,43 @@ export function ActiveTypingSession({
   const onKeystroke = useCallback(
     (info: { key: string; expected: string; correct: boolean }) => {
       recordKeyAttempt(info.key, !info.correct)
+      const now = Date.now()
+      
+      if (info.correct) {
+        if (lastKeyTime.current !== null) {
+          const diff = now - lastKeyTime.current
+          // Track rhythm if gap is under 3s (very forgiving for beginners)
+          if (diff < 3000) {
+            intervals.current.push(diff)
+            if (intervals.current.length > 20) intervals.current.shift()
+            
+            if (intervals.current.length >= 2) {
+              const mean = intervals.current.reduce((a, b) => a + b, 0) / intervals.current.length
+              const variance = intervals.current.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.current.length
+              const stdDev = Math.sqrt(variance)
+              
+              // Extremely forgiving for beginners: CV up to 1.5 before zeroing out.
+              const cv = stdDev / (mean || 1)
+              let sync = Math.max(0, Math.min(100, Math.round((1 - Math.min(cv, 1.5) / 1.5) * 100)))
+              if (isNaN(sync)) sync = 0
+              
+              onSyncUpdate?.(sync)
+
+              // Track session average
+              accumulatedSync.current += sync
+              syncSampleCount.current += 1
+            }
+          }
+        }
+        lastKeyTime.current = now
+      } else {
+        const k = info.key === ' ' ? ' ' : info.key.toLowerCase()
+        setSessionMissedKeys(prev => prev.includes(k) ? prev : [...prev, k])
+        // We no longer reset the buffer, but an error DOES drag down your average.
+        accumulatedSync.current += 0
+        syncSampleCount.current += 1
+        onSyncUpdate?.(0)
+      }
       const raw = info.key
       if (raw.length === 1 || raw === ' ') {
         const k = raw === ' ' ? ' ' : raw.toLowerCase()
@@ -98,7 +142,7 @@ export function ActiveTypingSession({
         playTone(info.correct ? 880 : 220, 0.05)
       }
     },
-    [recordKeyAttempt, sound],
+    [recordKeyAttempt, sound, onSyncUpdate],
   )
 
   const engineEnabled = useMemo(() => {
@@ -166,13 +210,19 @@ export function ActiveTypingSession({
         const fb = await generateCoachFeedback({
           wpm: 0,
           accuracy: 100,
+          sessionMissedKeys: [],
           topWeakKeys: topProblemKeys(6),
+          neuralSyncScore: 0,
           mode: config.mode,
         })
         setCoach(fb)
       })()
       return
     }
+
+    const avgSync = syncSampleCount.current > 0 
+      ? Math.round(accumulatedSync.current / syncSampleCount.current)
+      : 0
 
     savedRef.current = true
     const durationSec = Math.max(0.001, elapsedMs / 1000)
@@ -198,10 +248,13 @@ export function ActiveTypingSession({
       const fb = await generateCoachFeedback({
         wpm: finalWpm,
         accuracy: acc,
+        sessionMissedKeys,
         topWeakKeys: topProblemKeys(6),
+        neuralSyncScore: avgSync,
         mode: config.mode,
       })
       setCoach(fb)
+      // Finalize syncScore state for the results modal gauge
     })()
   }, [
     sessionEnded,
@@ -253,8 +306,12 @@ export function ActiveTypingSession({
     setResultsMeta(null)
     setResultsPhase('idle')
     setTimerHardStop(false)
-    setSessionEnded(false)
-    setKeyFlash(null)
+    setSessionMissedKeys([])
+    lastKeyTime.current = null
+    intervals.current = []
+    accumulatedSync.current = 0
+    syncSampleCount.current = 0
+    onSyncUpdate?.(0)
     setNowTick(Date.now())
     reset()
   }
