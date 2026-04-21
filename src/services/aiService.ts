@@ -16,31 +16,24 @@ export interface CoachFeedback {
   syncScore: number
 }
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+// The backend proxy handles authentication securely on Vercel.
+const PROXY_URL = '/api/groq';
 const MODEL = 'llama-3.3-70b-versatile';
 
 /**
  * Adaptive mode: large shuffled paragraph pool (`data/practice/adaptive`).
- * Weak-key weaving is still available for future hybrid lines via `buildSentenceFromWeakKeys`.
  */
 export async function generatePracticeText(req: PracticeRequest): Promise<string> {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (!apiKey) {
-    return pickPracticeParagraph('adaptive');
-  }
-
   try {
     const prompt = `Generate a typing practice text (approx 50 words) for a typist at "${req.difficulty}" difficulty.
 Focus on incorporating these weak keys naturally if provided: ${req.weakKeys.join(', ')}.
 ${req.seed ? `Theme/topic should be related to: ${req.seed}.` : ''}
 The text should be natural and engaging. Do not include any quotes, markdown, intros or outros, just the raw plain text.`;
 
-    const response = await fetch(GROQ_API_URL, {
+    const response = await fetch(PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: MODEL,
         messages: [{ role: 'user', content: prompt }],
@@ -53,7 +46,7 @@ The text should be natural and engaging. Do not include any quotes, markdown, in
        return data.choices[0].message.content.trim();
     }
   } catch (error) {
-    console.error('Error fetching practice text from Groq:', error);
+    console.error('Error fetching practice text from proxy:', error);
   }
 
   return pickPracticeParagraph('adaptive');
@@ -76,11 +69,8 @@ export async function generateCoachFeedback(input: {
   neuralSyncScore: number
   mode: string
 }): Promise<CoachFeedback> {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-
-  if (apiKey) {
-    try {
-      const prompt = `Analyze this typing session data and provide a personalized, comprehensive coaching report.
+  try {
+    const prompt = `Analyze this typing session data and provide a personalized, comprehensive coaching report.
 Data:
 - WPM: ${input.wpm}
 - Accuracy: ${input.accuracy}%
@@ -103,34 +93,30 @@ You must respond in strict JSON format matching this structure:
 
 Do not include any markdown formatting or extra text outside the JSON.`;
 
-      const response = await fetch(GROQ_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.7,
-          response_format: { type: "json_object" }
-        })
-      });
+    const response = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        response_format: { type: "json_object" }
+      })
+    });
 
-      const data = await response.json();
-      if (data.choices && data.choices.length > 0) {
-         const json = JSON.parse(data.choices[0].message.content.trim());
-         return {
-           ...json,
-           syncScore: input.neuralSyncScore
-         } as CoachFeedback;
-      }
-    } catch (error) {
-      console.error('Error fetching coach feedback from Groq:', error);
+    const data = await response.json();
+    if (data.choices && data.choices.length > 0) {
+       const json = JSON.parse(data.choices[0].message.content.trim());
+       return {
+         ...json,
+         syncScore: input.neuralSyncScore
+       } as CoachFeedback;
     }
+  } catch (error) {
+    console.error('Error fetching coach feedback from proxy:', error);
   }
 
-  // Fallback if API key is not present or API call fails
+  // Fallback if API call fails
   const tips: string[] = []
   if (input.accuracy < 92) {
     tips.push('Prioritize rhythm over speed until accuracy stays above 95%.')
@@ -171,11 +157,6 @@ Do not include any markdown formatting or extra text outside the JSON.`;
 }
 
 export async function generateChatbotResponse(history: {role: string, content: string}[]): Promise<string> {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (!apiKey) {
-    return "I'm offline right now! Please connect your Groq API key in the `.env` file.";
-  }
-
   try {
     const systemPrompt = {
       role: 'system',
@@ -184,12 +165,9 @@ You help users with typing techniques, posture, reducing mistakes, breaking plat
 Be concise, friendly, and practical. Keep responses under 3 paragraphs.`
     };
 
-    const response = await fetch(GROQ_API_URL, {
+    const response = await fetch(PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: MODEL,
         messages: [systemPrompt, ...history],
@@ -203,7 +181,7 @@ Be concise, friendly, and practical. Keep responses under 3 paragraphs.`
     }
     return "Could not generate a response. Please try again.";
   } catch (error) {
-    console.error('Error fetching chatbot response:', error);
+    console.error('Error fetching chatbot response from proxy:', error);
     return "Sorry, I ran into a connection error!";
   }
 }
